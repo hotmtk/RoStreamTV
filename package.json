@@ -1,0 +1,9 @@
+{
+  "name": "rostreamtv",
+  "version": "1.0.0",
+  "main": "api/index.js",
+  "dependencies": {
+    "stremio-addon-sdk": "^1.6.0",
+    "node-fetch": "^2.6.7"
+  }
+}
