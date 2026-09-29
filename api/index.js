@@ -60,35 +60,23 @@ async function getUpdatedChannels() {
         }
     }
 
-    // Grupare pe canale unice păstrând TOATE sursele, fără imagini
-    const groupedMap = new Map();
+    // Fără grupări: generăm câte o intrare unică pentru FIECARE canal găsit
+    const processedChannels = rawChannels.map((item, idx) => {
+        const safeHex = Buffer.from(item.name).toString("hex").substring(0, 10);
+        const id = `rostreamtv_s${item.sourceIndex}_${idx}_${safeHex}`;
 
-    for (const item of rawChannels) {
-        const normalizedKey = item.name.toLowerCase()
-            .replace(/hd|fhd|4k|ro:|romania/g, "")
-            .trim();
+        return {
+            id: id,
+            name: item.name,
+            url: item.url,
+            sourceIndex: item.sourceIndex
+        };
+    });
 
-        const id = "rostreamtv_" + Buffer.from(normalizedKey).toString("hex").substring(0, 16);
+    // Sortare alfabetică directă
+    processedChannels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
-        if (!groupedMap.has(normalizedKey)) {
-            groupedMap.set(normalizedKey, {
-                id: id,
-                name: item.name,
-                streams: []
-            });
-        }
-
-        const channelEntry = groupedMap.get(normalizedKey);
-        channelEntry.streams.push({
-            title: `${item.name} - Sursa ${item.sourceIndex}`,
-            url: item.url
-        });
-    }
-
-    const uniqueCatalog = Array.from(groupedMap.values());
-    uniqueCatalog.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
-
-    channelsCache = uniqueCatalog;
+    channelsCache = processedChannels;
     lastFetchTime = now;
     return channelsCache;
 }
@@ -96,9 +84,9 @@ async function getUpdatedChannels() {
 // 1. Manifest
 const manifest = {
     id: "org.rostreamtv.addon",
-    version: "1.2.0",
+    version: "1.3.0",
     name: "RoStreamTV",
-    description: "Canale TV Live cu surse multiple (Text Only)",
+    description: "Canale TV Live individuale din surse M3U8 (Text Only)",
     resources: ["catalog", "meta", "stream"],
     types: ["tv"],
     catalogs: [
@@ -112,7 +100,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 2. Catalog Handler (Doar text)
+// 2. Catalog Handler (Afișează toate canalele, inclusiv duplicatele)
 builder.defineCatalogHandler(async ({ type, id }) => {
     if (type === "tv" && id === "m3u8_channels") {
         const channels = await getUpdatedChannels();
@@ -120,15 +108,15 @@ builder.defineCatalogHandler(async ({ type, id }) => {
             id: ch.id,
             type: "tv",
             name: ch.name,
-            posterShape: "square", 
-            description: `${ch.streams.length} surse disponibile`
+            posterShape: "square",
+            description: `Sursa ${ch.sourceIndex}`
         }));
         return { metas };
     }
     return { metas: [] };
 });
 
-// 3. Meta Handler (Detalii canal fără poze)
+// 3. Meta Handler
 builder.defineMetaHandler(async ({ type, id }) => {
     if (type === "tv") {
         const channels = await getUpdatedChannels();
@@ -140,7 +128,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
                     id: found.id,
                     type: "tv",
                     name: found.name,
-                    description: `Transmisiune în direct. Disponibile ${found.streams.length} surse de streaming.`,
+                    description: `Transmisiune în direct pentru ${found.name} (Lista ${found.sourceIndex}).`,
                     isFree: true
                 }
             };
@@ -149,7 +137,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
     return { meta: null };
 });
 
-// 4. Stream Handler
+// 4. Stream Handler (Un singur stream direct per canal)
 builder.defineStreamHandler(async ({ type, id }) => {
     if (type === "tv") {
         const channels = await getUpdatedChannels();
@@ -157,7 +145,12 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
         if (found) {
             return {
-                streams: found.streams
+                streams: [
+                    {
+                        title: `Play ${found.name}`,
+                        url: found.url
+                    }
+                ]
             };
         }
     }
