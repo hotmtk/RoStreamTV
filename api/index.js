@@ -1,18 +1,19 @@
 const { addonBuilder, getRouter } = require("stremio-addon-sdk");
 const fetch = require("node-fetch");
 
-const M3U8_URLS = [
-    "http://hotmtk.go.ro/iptv/wlog.m3u",
-    "https://iptv-org.github.io/iptv/countries/ro.m3u",
-    "https://iptv-org.github.io/iptv/countries/md.m3u",
-    "http://hotmtk.go.ro/iptv/BEE.m3u8"
+// Configurare surse cu etichetele corespunzătoare
+const SOURCES = [
+    { tag: "WLOG", url: "http://hotmtk.go.ro/iptv/wlog.m3u" },
+    { tag: "RO", url: "https://iptv-org.github.io/iptv/countries/ro.m3u" },
+    { tag: "MD", url: "https://iptv-org.github.io/iptv/countries/md.m3u" },
+    { tag: "BEE", url: "http://hotmtk.go.ro/iptv/BEE.m3u8" }
 ];
 
 let channelsCache = [];
 let lastFetchTime = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minute
 
-function parseM3U(content, sourceIndex) {
+function parseM3U(content, sourceTag) {
     const lines = content.split(/\r?\n/);
     const channels = [];
     let currentName = null;
@@ -30,7 +31,7 @@ function parseM3U(content, sourceIndex) {
                 channels.push({
                     name: currentName,
                     url: line,
-                    sourceIndex: sourceIndex + 1
+                    sourceTag: sourceTag
                 });
             }
             currentName = null;
@@ -46,36 +47,36 @@ async function getUpdatedChannels() {
     }
 
     const rawChannels = [];
-    for (let i = 0; i < M3U8_URLS.length; i++) {
-        const url = M3U8_URLS[i];
+    for (const source of SOURCES) {
         try {
-            const response = await fetch(url, {
+            const response = await fetch(source.url, {
                 headers: { "User-Agent": "Mozilla/5.0" }
             });
             if (response.ok) {
                 const text = await response.text();
-                const parsed = parseM3U(text, i);
+                const parsed = parseM3U(text, source.tag);
                 rawChannels.push(...parsed);
             }
         } catch (err) {
-            console.error(`Eroare la ${url}:`, err.message);
+            console.error(`Eroare la descarcarea sursei ${source.tag} (${source.url}):`, err.message);
         }
     }
 
-    // Fără grupări: generăm câte o intrare unică pentru FIECARE canal găsit
+    // Atasam eticheta sursei direct la numele canalului
     const processedChannels = rawChannels.map((item, idx) => {
-        const safeHex = Buffer.from(item.name).toString("hex").substring(0, 10);
-        const id = `rostreamtv_s${item.sourceIndex}_${idx}_${safeHex}`;
+        const displayName = `[${item.sourceTag}] ${item.name}`;
+        const safeHex = Buffer.from(displayName).toString("hex").substring(0, 10);
+        const id = `rostreamtv_${item.sourceTag.toLowerCase()}_${idx}_${safeHex}`;
 
         return {
             id: id,
-            name: item.name,
+            name: displayName,
             url: item.url,
-            sourceIndex: item.sourceIndex
+            sourceTag: item.sourceTag
         };
     });
 
-    // Sortare alfabetică directă
+    // Sortare alfabetica dupa numele formatat
     processedChannels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
 
     channelsCache = processedChannels;
@@ -86,9 +87,9 @@ async function getUpdatedChannels() {
 // 1. Manifest
 const manifest = {
     id: "org.rostreamtv.addon",
-    version: "1.3.0",
+    version: "1.4.0",
     name: "RoStreamTV",
-    description: "Canale TV Live individuale din surse M3U8 (Text Only)",
+    description: "Canale TV Live din sursele RO, MD, WLOG si BEE",
     resources: ["catalog", "meta", "stream"],
     types: ["tv"],
     catalogs: [
@@ -102,7 +103,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 2. Catalog Handler (Afișează toate canalele, inclusiv duplicatele)
+// 2. Catalog Handler
 builder.defineCatalogHandler(async ({ type, id }) => {
     if (type === "tv" && id === "m3u8_channels") {
         const channels = await getUpdatedChannels();
@@ -111,7 +112,7 @@ builder.defineCatalogHandler(async ({ type, id }) => {
             type: "tv",
             name: ch.name,
             posterShape: "square",
-            description: `Sursa ${ch.sourceIndex}`
+            description: `Sursa: ${ch.sourceTag}`
         }));
         return { metas };
     }
@@ -130,7 +131,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
                     id: found.id,
                     type: "tv",
                     name: found.name,
-                    description: `Transmisiune în direct pentru ${found.name} (Lista ${found.sourceIndex}).`,
+                    description: `Transmisiune live furnizata de sursa ${found.sourceTag}.`,
                     isFree: true
                 }
             };
@@ -139,7 +140,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
     return { meta: null };
 });
 
-// 4. Stream Handler (Un singur stream direct per canal)
+// 4. Stream Handler
 builder.defineStreamHandler(async ({ type, id }) => {
     if (type === "tv") {
         const channels = await getUpdatedChannels();
