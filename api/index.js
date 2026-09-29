@@ -4,6 +4,8 @@ const fetch = require("node-fetch");
 const M3U8_URLS = [
     "http://hotmtk.go.ro/iptv/wlog.m3u",
     "https://iptv-org.github.io/iptv/countries/ro.m3u"
+    "https://iptv-org.github.io/iptv/countries/md.m3u"
+    "http://hotmtk.go.ro/iptv/BEE.m3u8"
 ];
 
 let channelsCache = [];
