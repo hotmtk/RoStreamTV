@@ -61,8 +61,9 @@ async function getUpdatedChannels() {
         }
     }
 
+    // Format nou: Nume Canal | SURSA
     const processedChannels = rawChannels.map((item, idx) => {
-        const displayName = `${item.name} [${item.sourceTag}]`;
+        const displayName = `${item.name} | ${item.sourceTag}`;
         const safeHex = Buffer.from(displayName).toString("hex").substring(0, 10);
         const id = `rostreamtv_${item.sourceTag.toLowerCase()}_${idx}_${safeHex}`;
 
@@ -82,10 +83,10 @@ async function getUpdatedChannels() {
     return channelsCache;
 }
 
-// 1. Manifest (cu filtru obligatoriu pentru a ascunde catalogul de pe Home)
+// 1. Manifest
 const manifest = {
     id: "org.rostreamtv.addon",
-    version: "1.6.0",
+    version: "1.7.0",
     name: "RoStreamTV",
     description: "Canale TV Live din sursele RO, MD, WLOG si BEE",
     resources: ["catalog", "meta", "stream"],
@@ -108,12 +109,11 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 2. Catalog Handler (Filtrare dupa categorie/sursa)
+// 2. Catalog Handler
 builder.defineCatalogHandler(async ({ type, id, extra }) => {
     if (type === "tv" && id === "m3u8_channels") {
         let channels = await getUpdatedChannels();
 
-        // Daca userul a ales o sursa specifica (alta decat "Toate")
         if (extra && extra.genre && extra.genre !== "Toate") {
             channels = channels.filter(ch => ch.sourceTag === extra.genre);
         }
