@@ -10,11 +10,10 @@ let channelsCache = [];
 let lastFetchTime = 0;
 const CACHE_TTL = 5 * 60 * 1000; // 5 minute
 
-function parseM3U(content) {
+function parseM3U(content, sourceIndex) {
     const lines = content.split(/\r?\n/);
     const channels = [];
     let currentName = null;
-    let currentLogo = "";
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i].trim();
@@ -24,26 +23,15 @@ function parseM3U(content) {
             if (commaIndex !== -1) {
                 currentName = line.substring(commaIndex + 1).trim();
             }
-
-            const logoMatch = line.match(/tvg-logo="([^"]+)"/i);
-            if (logoMatch) {
-                currentLogo = logoMatch[1];
-            } else {
-                currentLogo = "https://via.placeholder.com/300x300.png?text=TV";
-            }
         } else if (line && !line.startsWith("#")) {
             if (currentName) {
-                // Generăm un ID unic bazat pe nume
-                const id = "rostreamtv_" + Buffer.from(currentName).toString("hex").substring(0, 16);
                 channels.push({
-                    id: id,
                     name: currentName,
-                    logo: currentLogo,
-                    url: line
+                    url: line,
+                    sourceIndex: sourceIndex + 1
                 });
             }
             currentName = null;
-            currentLogo = "";
         }
     }
     return channels;
@@ -55,31 +43,52 @@ async function getUpdatedChannels() {
         return channelsCache;
     }
 
-    const allChannels = [];
-    for (const url of M3U8_URLS) {
+    const rawChannels = [];
+    for (let i = 0; i < M3U8_URLS.length; i++) {
+        const url = M3U8_URLS[i];
         try {
             const response = await fetch(url, {
                 headers: { "User-Agent": "Mozilla/5.0" }
             });
             if (response.ok) {
                 const text = await response.text();
-                const parsed = parseM3U(text);
-                allChannels.push(...parsed);
+                const parsed = parseM3U(text, i);
+                rawChannels.push(...parsed);
             }
         } catch (err) {
-            console.error(`Eroare la descărcarea ${url}:`, err.message);
+            console.error(`Eroare la ${url}:`, err.message);
         }
     }
 
-    // Eliminare duplicate după nume
-    const uniqueChannels = Array.from(
-        new Map(allChannels.map(item => [item.name, item])).values()
-    );
+    // Grupare pe canale unice păstrând TOATE sursele, fără imagini
+    const groupedMap = new Map();
 
-    // Sortare alfabetică
-    uniqueChannels.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+    for (const item of rawChannels) {
+        const normalizedKey = item.name.toLowerCase()
+            .replace(/hd|fhd|4k|ro:|romania/g, "")
+            .trim();
 
-    channelsCache = uniqueChannels;
+        const id = "rostreamtv_" + Buffer.from(normalizedKey).toString("hex").substring(0, 16);
+
+        if (!groupedMap.has(normalizedKey)) {
+            groupedMap.set(normalizedKey, {
+                id: id,
+                name: item.name,
+                streams: []
+            });
+        }
+
+        const channelEntry = groupedMap.get(normalizedKey);
+        channelEntry.streams.push({
+            title: `${item.name} - Sursa ${item.sourceIndex}`,
+            url: item.url
+        });
+    }
+
+    const uniqueCatalog = Array.from(groupedMap.values());
+    uniqueCatalog.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: "base" }));
+
+    channelsCache = uniqueCatalog;
     lastFetchTime = now;
     return channelsCache;
 }
@@ -87,9 +96,9 @@ async function getUpdatedChannels() {
 // 1. Manifest
 const manifest = {
     id: "org.rostreamtv.addon",
-    version: "1.0.0",
+    version: "1.2.0",
     name: "RoStreamTV",
-    description: "Canale TV Live concatenate din surse M3U8",
+    description: "Canale TV Live cu surse multiple (Text Only)",
     resources: ["catalog", "meta", "stream"],
     types: ["tv"],
     catalogs: [
@@ -103,7 +112,7 @@ const manifest = {
 
 const builder = new addonBuilder(manifest);
 
-// 2. Catalog Handler (Lista de canale)
+// 2. Catalog Handler (Doar text)
 builder.defineCatalogHandler(async ({ type, id }) => {
     if (type === "tv" && id === "m3u8_channels") {
         const channels = await getUpdatedChannels();
@@ -111,16 +120,15 @@ builder.defineCatalogHandler(async ({ type, id }) => {
             id: ch.id,
             type: "tv",
             name: ch.name,
-            poster: ch.logo,
-            posterShape: "square",
-            description: `Canal TV Live: ${ch.name}`
+            posterShape: "square", 
+            description: `${ch.streams.length} surse disponibile`
         }));
         return { metas };
     }
     return { metas: [] };
 });
 
-// 3. Meta Handler (Detalii canal la click)
+// 3. Meta Handler (Detalii canal fără poze)
 builder.defineMetaHandler(async ({ type, id }) => {
     if (type === "tv") {
         const channels = await getUpdatedChannels();
@@ -132,9 +140,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
                     id: found.id,
                     type: "tv",
                     name: found.name,
-                    poster: found.logo,
-                    background: found.logo,
-                    description: `Transmisiune în direct pentru canalul ${found.name}.`,
+                    description: `Transmisiune în direct. Disponibile ${found.streams.length} surse de streaming.`,
                     isFree: true
                 }
             };
@@ -143,7 +149,7 @@ builder.defineMetaHandler(async ({ type, id }) => {
     return { meta: null };
 });
 
-// 4. Stream Handler (Linkul M3U8 de redare)
+// 4. Stream Handler
 builder.defineStreamHandler(async ({ type, id }) => {
     if (type === "tv") {
         const channels = await getUpdatedChannels();
@@ -151,19 +157,14 @@ builder.defineStreamHandler(async ({ type, id }) => {
 
         if (found) {
             return {
-                streams: [
-                    {
-                        title: `${found.name} (Live HD)`,
-                        url: found.url
-                    }
-                ]
+                streams: found.streams
             };
         }
     }
     return { streams: [] };
 });
 
-// 5. Export pentru Vercel
+// 5. Export Vercel
 const addonInterface = builder.getInterface();
 const router = getRouter(addonInterface);
 
@@ -173,4 +174,3 @@ module.exports = (req, res) => {
         res.end();
     });
 };
-
